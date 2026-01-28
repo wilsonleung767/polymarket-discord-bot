@@ -69,6 +69,13 @@ const commands = [
         .setDescription('Market categories to filter (comma-separated, e.g., "crypto,sports")')
         .setRequired(false)
     )
+    .addNumberOption(option =>
+      option
+        .setName('totallimit')
+        .setDescription('Total USDC limit for session (stops when reached, default: unlimited)')
+        .setMinValue(1)
+        .setRequired(false)
+    )
     .toJSON(),
 
   new SlashCommandBuilder()

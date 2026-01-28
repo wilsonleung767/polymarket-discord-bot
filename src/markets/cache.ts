@@ -1,4 +1,4 @@
-import type { PolymarketSDK } from '@catalyst-team/poly-sdk';
+import type { PolymarketSDK,  GammaApiClient } from '@catalyst-team/poly-sdk';
 
 interface MarketInfo {
   name: string;
@@ -13,9 +13,11 @@ interface MarketInfo {
 export class MarketCache {
   private cache: Map<string, MarketInfo> = new Map();
   private sdk: PolymarketSDK;
+  private gammaApiClient: GammaApiClient;
 
-  constructor(sdk: PolymarketSDK) {
+  constructor(sdk: PolymarketSDK, gammaApiClient: GammaApiClient) {
     this.sdk = sdk;
+    this.gammaApiClient = gammaApiClient;
   }
 
   /**
@@ -30,11 +32,27 @@ export class MarketCache {
 
     // Fetch from API
     try {
+      // First get basic market info (has slug but no tags)
       const market = await this.sdk.markets.getMarket(conditionId);
+      const slug = market.slug || '';
+      const name = market.question || 'Unknown Market';
+      
+      let tags: string[] = [];
+      
+      // If we have a slug, fetch from Gamma API to get tags
+      if (slug) {
+        try {
+          const gammaMarket = await this.gammaApiClient.getMarketBySlug(slug);
+          tags = gammaMarket?.tags || [];
+        } catch (gammaError) {
+          console.warn(`Failed to fetch tags from Gamma for ${slug}:`, gammaError);
+        }
+      }
+      
       const info: MarketInfo = {
-        name: market.question || market.question || 'Unknown Market',
-        slug: market.slug || '',
-        tags: (market as any).tags || [],
+        name,
+        slug,
+        tags,
       };
       
       // Cache it

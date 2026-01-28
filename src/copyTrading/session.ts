@@ -1,4 +1,4 @@
-import type { PolymarketSDK, AutoCopyTradingSubscription, SmartMoneyTrade, OrderResult } from '@catalyst-team/poly-sdk';
+import type { PolymarketSDK, AutoCopyTradingSubscription, SmartMoneyTrade, OrderResult, GammaApiClient } from '@catalyst-team/poly-sdk';
 import type { Client, TextChannel } from 'discord.js';
 import { MarketCache } from '../markets/cache.js';
 import { formatTradeMessage } from '../format/tradeMessage.js';
@@ -14,12 +14,14 @@ export interface SessionConfig {
   minTradeSize: number;
   orderType: 'FOK' | 'FAK';
   categories?: string[];
+  totalLimit?: number;
 }
 
 export interface SessionState {
   config: SessionConfig;
   subscription: AutoCopyTradingSubscription;
   startTime: number;
+  cumulativeSpent: number;
 }
 
 /**
@@ -32,12 +34,12 @@ export class CopyTradingSession {
   private marketCache: MarketCache;
   private activeSession: SessionState | null = null;
 
-  constructor(sdk: PolymarketSDK, discordClient: Client) {
+  constructor(sdk: PolymarketSDK, discordClient: Client, gammaApiClient: GammaApiClient) {
     this.sdk = sdk;
     this.discordClient = discordClient;
-    this.marketCache = new MarketCache(sdk);
+    this.marketCache = new MarketCache(sdk, gammaApiClient);
   }
-
+  
   /**
    * Check if a session is currently active
    */
@@ -90,6 +92,7 @@ export class CopyTradingSession {
         config,
         subscription,
         startTime: Date.now(),
+        cumulativeSpent: 0,
       };
 
       console.log(`Session started successfully. Tracking ${subscription.targetAddresses.length} address(es)`);
@@ -161,6 +164,30 @@ export class CopyTradingSession {
       }
 
       const copyUsdcAmount = copyValue;
+
+      // Check total limit before executing
+      if (config.totalLimit && this.activeSession) {
+        const newTotal = this.activeSession.cumulativeSpent + copyUsdcAmount;
+        
+        if (newTotal > config.totalLimit) {
+          console.log(`🛑 Total limit reached: $${this.activeSession.cumulativeSpent.toFixed(2)} + $${copyUsdcAmount.toFixed(2)} = $${newTotal.toFixed(2)} > $${config.totalLimit}`);
+          
+          // Send limit reached notification
+          const channel = await this.discordClient.channels.fetch(config.channelId);
+          if (channel?.isTextBased()) {
+            await (channel as TextChannel).send({
+              content: `🛑 **Total Limit Reached!**\n\nSession stopped automatically.\nTotal spent: $${this.activeSession.cumulativeSpent.toFixed(2)}\nLimit: $${config.totalLimit}\n\nUse \`/start\` to begin a new session.`,
+            });
+          }
+          
+          // Stop the session
+          await this.stop();
+          return;
+        }
+        
+        // Update cumulative spending (even in dry run for tracking)
+        this.activeSession.cumulativeSpent += copyUsdcAmount;
+      }
 
       // Format and send message
       const embed = formatTradeMessage({

@@ -23,6 +23,7 @@ export async function handleStartCommand(
     const minTradeSize = interaction.options.getNumber('minsize') ?? config.trading.minTradeSize;
     const orderType = (interaction.options.getString('ordertype') as 'FOK' | 'FAK') ?? config.trading.orderType;
     const categoriesInput = interaction.options.getString('categories');
+    const totalLimit = interaction.options.getNumber('totallimit') ?? 10000000; // Default to no limit
     
     // Parse and validate categories (comma-separated)
     let categories: string[] | undefined;
@@ -112,6 +113,7 @@ export async function handleStartCommand(
       minTradeSize,
       orderType,
       categories,
+      totalLimit,
     });
 
     // Send success message
@@ -128,7 +130,8 @@ export async function handleStartCommand(
         { name: '🎯 Min Trade Size', value: `$${minTradeSize}`, inline: true },
         { name: '📋 Order Type', value: orderType, inline: true },
         { name: '🏷️ Categories', value: categories && categories.length > 0 ? categories.join(', ') : 'All', inline: true },
-        { name: '👷 Started By', value: `<@${interaction.user.id}>`, inline: true }
+        { name: '� Total Limit', value: totalLimit ? `$${totalLimit}` : 'Unlimited', inline: true },
+        { name: '�👷 Started By', value: `<@${interaction.user.id}>`, inline: true }
       )
       .setTimestamp();
 
@@ -240,7 +243,9 @@ export async function handleStatusCommand(
         { name: '💰 Max Per Trade', value: `$${sessionConfig.maxSizePerTrade}`, inline: true },
         { name: '📋 Order Type', value: sessionConfig.orderType, inline: true },
         { name: '🏷️ Categories', value: sessionConfig.categories && sessionConfig.categories.length > 0 ? sessionConfig.categories.join(', ') : 'All', inline: true },
-        { name: '📈 Detected', value: stats.tradesDetected.toString(), inline: true },
+        { name: '� Total Limit', value: sessionConfig.totalLimit ? `$${sessionConfig.totalLimit}` : 'Unlimited', inline: true },
+        { name: '💸 Cumulative Spent', value: `$${sessionState.cumulativeSpent.toFixed(2)}`, inline: true },
+        { name: '�📈 Detected', value: stats.tradesDetected.toString(), inline: true },
         { name: '✅ Executed', value: stats.tradesExecuted.toString(), inline: true },
         { name: '⏭️ Skipped', value: stats.tradesSkipped.toString(), inline: true },
         { name: '❌ Failed', value: stats.tradesFailed.toString(), inline: true },
