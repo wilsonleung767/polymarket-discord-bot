@@ -80,6 +80,11 @@ export class CopyTradingSession {
     console.log(`Channel: ${config.channelId}, DryRun: ${config.dryRun}`);
 
     try {
+      // Add delay to ensure WebSocket connection is fully registered on Polymarket's backend
+      // This prevents foreign key constraint violations when subscribing to activity trades
+      console.log('⏳ Waiting 1 second for WebSocket connection to stabilize...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
       // Start auto copy trading
       const subscription = await this.smartMoneyService.startAutoCopyTrading({
         targetAddresses: [config.targetAddress],
