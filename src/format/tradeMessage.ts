@@ -38,14 +38,12 @@ function toUtc8String(unixSeconds: number): string {
 export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
   const { trade, result, marketName, marketSlug, leaderNotional, copyUsdcAmount, dryRun } = data;
 
-  // Determine color based on success and dry run
+  // Determine color based on action (BUY/SELL)
   let color: number;
   if (dryRun) {
     color = 0x95a5a6; // Gray for dry run
-  } else if (result.success) {
-    color = trade.side === 'BUY' ? 0x2ecc71 : 0xe74c3c; // Green for buy, red for sell
   } else {
-    color = 0xe67e22; // Orange for failed
+    color = trade.side === 'BUY' ? 0x2ecc71 : 0xe74c3c; // Green for buy, red for sell
   }
 
   // Format timestamp to UTC+8
@@ -67,7 +65,7 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
     {
       name: '👤 Trader',
       value: trade.traderName 
-        ? `${trade.traderName}\n\`${trade.traderAddress.slice(0, 10)}...${trade.traderAddress.slice(-8)}\``
+        ? `[${trade.traderName}](https://polymarket.com/@${trade.traderName})`
         : `\`${trade.traderAddress}\``,
       inline: true,
     },
@@ -78,17 +76,12 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
     },
     {
       name: '💰 Leader Bet',
-      value: `$${leaderNotional.toFixed(2)} USDC\n@ ${trade.price.toFixed(4)}`,
+      value: `$${leaderNotional.toFixed(2)}\n@ ${trade.price.toFixed(4)}`,
       inline: true,
     },
     {
-      name: '🤖 Your Copy',
-      value: `$${copyUsdcAmount.toFixed(2)} USDC`,
-      inline: true,
-    },
-    {
-      name: '⏰ Time (UTC+8)',
-      value: timestampUtc8,
+      name: '💵 Copied Amount',
+      value: `$${copyUsdcAmount.toFixed(2)}`,
       inline: true,
     },
     {
@@ -100,12 +93,15 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
     }
   );
 
-  // Add footer
+  // Add footer with clickable transaction link
   if (dryRun) {
     embed.setFooter({ text: '🧪 Dry Run Mode - No real trades executed' });
   } else if (trade.txHash) {
-    embed.setFooter({ 
-      text: `TX: ${trade.txHash.slice(0, 10)}...${trade.txHash.slice(-8)}` 
+    // Note: Discord footers don't support hyperlinks, so we add TX as a field instead
+    embed.addFields({
+      name: '🔗 Transaction',
+      value: `[\`${trade.txHash.slice(0, 10)}...${trade.txHash.slice(-8)}\`](https://polygonscan.com/tx/${trade.txHash})`,
+      inline: false,
     });
   }
 

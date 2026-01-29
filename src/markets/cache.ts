@@ -1,4 +1,4 @@
-import type { PolymarketSDK,  GammaApiClient } from '@catalyst-team/poly-sdk';
+import type { GammaApiClient } from '@catalyst-team/poly-sdk';
 
 interface MarketInfo {
   name: string;
@@ -6,69 +6,102 @@ interface MarketInfo {
   tags: string[];
 }
 
+type GammaEventTag = {
+  id?: string | number;
+  label?: string;
+  slug?: string;
+};
+
+type GammaEventResponse = {
+  id?: string;
+  slug?: string;
+  title?: string;
+  tags?: GammaEventTag[];
+};
+
+/**
+ * Fetch event data directly from Gamma API
+ */
+async function fetchGammaEventBySlug(eventSlug: string): Promise<GammaEventResponse | null> {
+  const url = `https://gamma-api.polymarket.com/events/slug/${encodeURIComponent(eventSlug)}`;
+  
+  try {
+    const res = await fetch(url, { 
+      headers: { accept: 'application/json' } 
+    });
+
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new Error(`Gamma events fetch failed: ${res.status} ${res.statusText}`);
+    }
+
+    return (await res.json()) as GammaEventResponse;
+  } catch (error) {
+    console.error(`Failed to fetch Gamma event ${eventSlug}:`, error);
+    return null;
+  }
+}
+
 /**
  * Simple in-memory cache for market metadata
- * Reduces API calls when the same market is traded multiple times
+ * Fetches tags from Gamma API for category filtering
  */
 export class MarketCache {
   private cache: Map<string, MarketInfo> = new Map();
-  private sdk: PolymarketSDK;
   private gammaApiClient: GammaApiClient;
 
-  constructor(sdk: PolymarketSDK, gammaApiClient: GammaApiClient) {
-    this.sdk = sdk;
+  constructor(gammaApiClient: GammaApiClient) {
     this.gammaApiClient = gammaApiClient;
   }
 
   /**
-   * Get market info by conditionId, with caching
+   * Get market info by event slug, with caching
+   * Fetches tags from Gamma API for accurate category filtering
    */
-  async getMarketInfo(conditionId: string): Promise<MarketInfo> {
+  async getMarketInfo(marketSlug: string): Promise<MarketInfo> {
     // Check cache first
-    const cached = this.cache.get(conditionId);
+    const cached = this.cache.get(marketSlug);
     if (cached) {
       return cached;
     }
 
-    // Fetch from API
-    try {
-      // First get basic market info (has slug but no tags)
-      const market = await this.sdk.markets.getMarket(conditionId);
-      const slug = market.slug || '';
-      const name = market.question || 'Unknown Market';
-      
-      let tags: string[] = [];
-      
-      // If we have a slug, fetch from Gamma API to get tags
-      if (slug) {
-        try {
-          const gammaMarket = await this.gammaApiClient.getMarketBySlug(slug);
-          tags = gammaMarket?.tags || [];
-        } catch (gammaError) {
-          console.warn(`Failed to fetch tags from Gamma for ${slug}:`, gammaError);
+    let tags: string[] = [];
+    let name = '';
+    let slug = marketSlug;
+    
+    // If we have a slug, fetch from Gamma API to get tags and name
+    if (marketSlug) {
+      try {
+        console.log(`🔍 [DEBUG] Fetching market tags from Gamma API for marketSlug: ${marketSlug}`);
+        const gammaEvent = await fetchGammaEventBySlug(marketSlug);
+        if (gammaEvent) {
+          // Extract tag slugs (e.g. "league-of-legends", "esports")
+          tags = (gammaEvent.tags ?? [])
+            .map(t => t.slug)
+            .filter((v): v is string => Boolean(v));
+          
+          name = gammaEvent.title ?? gammaEvent.slug ?? '';
+          slug = gammaEvent.slug ?? marketSlug;
+          
+          console.log(`✅ [DEBUG] Fetched tags: ${JSON.stringify(tags)}`);
+          console.log(`✅ [DEBUG] Fetched name: ${name}`);
+        } else {
+          console.warn(`⚠️ [WARN] Gamma API returned null for marketSlug: ${marketSlug}`);
         }
+      } catch (error) {
+        console.error(`❌ [ERROR] Failed to fetch tags from Gamma API for ${marketSlug}:`, error);
       }
-      
-      const info: MarketInfo = {
-        name,
-        slug,
-        tags,
-      };
-      
-      // Cache it
-      this.cache.set(conditionId, info);
-      return info;
-    } catch (error) {
-      console.error(`Failed to fetch market ${conditionId}:`, error);
-      
-      // Return fallback
-      const fallback: MarketInfo = {
-        name: `Market ${conditionId.slice(0, 10)}...`,
-        slug: '',
-        tags: [],
-      };
-      return fallback;
     }
+    
+    const info: MarketInfo = {
+      name,
+      slug,
+      tags,
+    };
+    
+    // Cache it
+    this.cache.set(marketSlug, info);
+    return info;
   }
 
   /**

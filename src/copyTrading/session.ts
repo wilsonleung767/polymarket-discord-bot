@@ -1,4 +1,4 @@
-import type { PolymarketSDK, AutoCopyTradingSubscription, SmartMoneyTrade, OrderResult, GammaApiClient } from '@catalyst-team/poly-sdk';
+import type { SmartMoneyService, TradingService, DataApiClient, GammaApiClient, AutoCopyTradingSubscription, SmartMoneyTrade, OrderResult } from '@catalyst-team/poly-sdk';
 import type { Client, TextChannel } from 'discord.js';
 import { MarketCache } from '../markets/cache.js';
 import { formatTradeMessage } from '../format/tradeMessage.js';
@@ -29,15 +29,27 @@ export interface SessionState {
  * Only one active session allowed at a time
  */
 export class CopyTradingSession {
-  private sdk: PolymarketSDK;
+  private smartMoneyService: SmartMoneyService;
+  private tradingService: TradingService;
+  private dataApiClient: DataApiClient;
+  private gammaApiClient: GammaApiClient;
   private discordClient: Client;
   private marketCache: MarketCache;
   private activeSession: SessionState | null = null;
 
-  constructor(sdk: PolymarketSDK, discordClient: Client, gammaApiClient: GammaApiClient) {
-    this.sdk = sdk;
+  constructor(
+    smartMoneyService: SmartMoneyService,
+    tradingService: TradingService,
+    dataApiClient: DataApiClient,
+    gammaApiClient: GammaApiClient,
+    discordClient: Client
+  ) {
+    this.smartMoneyService = smartMoneyService;
+    this.tradingService = tradingService;
+    this.dataApiClient = dataApiClient;
+    this.gammaApiClient = gammaApiClient;
     this.discordClient = discordClient;
-    this.marketCache = new MarketCache(sdk, gammaApiClient);
+    this.marketCache = new MarketCache(gammaApiClient);
   }
   
   /**
@@ -69,7 +81,7 @@ export class CopyTradingSession {
 
     try {
       // Start auto copy trading
-      const subscription = await this.sdk.smartMoney.startAutoCopyTrading({
+      const subscription = await this.smartMoneyService.startAutoCopyTrading({
         targetAddresses: [config.targetAddress],
         sizeScale: config.sizeScale,
         maxSizePerTrade: config.maxSizePerTrade,
@@ -136,13 +148,16 @@ export class CopyTradingSession {
     config: SessionConfig
   ): Promise<void> {
     try {
-      // Fetch market info
-      const marketInfo = await this.marketCache.getMarketInfo(trade.conditionId || '');
+      // Fetch market info (using marketSlug from trade object)
+      const marketInfo = await this.marketCache.getMarketInfo(trade?.marketSlug ?? '');
 
       // Filter by categories if specified
       if (config.categories && config.categories.length > 0) {
+        console.log(`🔍 [DEBUG] Categories filter active: ${JSON.stringify(config.categories)}`);
         const marketTags = marketInfo.tags.map(t => t.toLowerCase());
+        console.log(`🏷️ [DEBUG] Market tags (lowercase): ${JSON.stringify(marketTags)}`);
         const hasMatchingCategory = config.categories.some(cat => marketTags.includes(cat));
+        console.log(`✅ [DEBUG] Has matching category: ${hasMatchingCategory}`);
         
         if (!hasMatchingCategory) {
           console.log(`⏭️ Skipping trade - market tags [${marketInfo.tags.join(', ')}] don't match filter [${config.categories.join(', ')}]`);

@@ -1,5 +1,15 @@
 import { Client, GatewayIntentBits, Events } from 'discord.js';
-import { PolymarketSDK } from '@catalyst-team/poly-sdk';
+import {
+  SmartMoneyService,
+  WalletService,
+  RealtimeServiceV2,
+  TradingService,
+  DataApiClient,
+  GammaApiClient,
+  SubgraphClient,
+  RateLimiter,
+  createUnifiedCache,
+} from '@catalyst-team/poly-sdk';
 import { config } from './config.js';
 import { CopyTradingSession } from './copyTrading/session.js';
 import { handleStartCommand, handleStopCommand, handleStatusCommand } from './commands/handlers.js';
@@ -10,47 +20,72 @@ console.log('='.repeat(60));
 
 // Global instances
 let discordClient: Client;
-let polymarketSDK: PolymarketSDK;
+let realtimeService: RealtimeServiceV2;
+let smartMoneyService: SmartMoneyService;
+let tradingService: TradingService;
+let dataApiClient: DataApiClient;
+let gammaApiClient: GammaApiClient;
 let copyTradingSession: CopyTradingSession;
 
 async function main() {
   try {
-    // Initialize Polymarket SDK
-    console.log('🔧 Initializing Polymarket SDK...');
-    polymarketSDK = await PolymarketSDK.create({
-      privateKey: config.polymarket.privateKey,
-    });
-    console.log('✅ Polymarket SDK initialized and connected');
+    // Initialize services manually (following working script pattern)
+    console.log('🔧 Initializing Polymarket services...');
     
-    // Verify WebSocket connection
-    if (polymarketSDK.realtime.isConnected?.()) {
-      console.log('✅ WebSocket connection active');
-    } else {
-      console.warn('⚠️  WebSocket not connected - trades may not be detected');
-    }
+    const cache = createUnifiedCache();
+    const rateLimiter = new RateLimiter();
+    dataApiClient = new DataApiClient(rateLimiter, cache);
+    gammaApiClient = new GammaApiClient(rateLimiter, cache);
+    const subgraph = new SubgraphClient(rateLimiter, cache);
+    const walletService = new WalletService(dataApiClient, subgraph, cache);
+    realtimeService = new RealtimeServiceV2();
+    tradingService = new TradingService(rateLimiter, cache, {
+      privateKey: config.polymarket.privateKey,
+      chainId: 137,
+    });
+
+    smartMoneyService = new SmartMoneyService(
+      walletService,
+      realtimeService,
+      tradingService
+    );
+
+    const ourAddress = tradingService.getAddress().toLowerCase();
+    console.log(`  Our wallet: ${ourAddress.slice(0, 10)}...${ourAddress.slice(-6)}`);
+    console.log('✅ Services initialized');
+
+    // Connect WebSocket with explicit wait
+    console.log('📡 Connecting to WebSocket...');
+    realtimeService.connect();
+    
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('WebSocket connection timeout after 10 seconds'));
+      }, 10000);
+      
+      realtimeService.once('connected', () => {
+        clearTimeout(timeout);
+        console.log('✅ WebSocket connected successfully');
+        resolve();
+      });
+    });
 
     // Monitor WebSocket connection status
-    polymarketSDK.realtime.on('disconnected', () => {
+    realtimeService.on('disconnected', () => {
       console.warn('⚠️  WebSocket disconnected! Attempting to reconnect...');
     });
 
-    polymarketSDK.realtime.on('connected', () => {
+    realtimeService.on('connected', () => {
       console.log('✅ WebSocket reconnected successfully');
     });
 
-    polymarketSDK.realtime.on('statusChange', (status) => {
+    realtimeService.on('statusChange', (status) => {
       console.log(`📡 WebSocket status: ${status}`);
     });
 
-    // Monitor for errors (including rate limiting)
-    polymarketSDK.realtime.on('error', (error: Error) => {
-      if (error.message.includes('429')) {
-        console.error('🚫 RATE LIMITED! Too many connections. Waiting 60 seconds before retry...');
-        console.error('💡 Tip: Make sure you only have ONE bot instance running.');
-        console.error('   Run kill-bot.bat to stop all Node processes, then restart.');
-      } else {
-        console.error('❌ WebSocket error:', error.message);
-      }
+    // Monitor for errors
+    realtimeService.on('error', (error: Error) => {
+      console.error('❌ WebSocket error:', error.message);
     });
 
     // Initialize Discord client
@@ -63,7 +98,13 @@ async function main() {
     });
 
     // Initialize copy trading session manager
-    copyTradingSession = new CopyTradingSession(polymarketSDK, discordClient);
+    copyTradingSession = new CopyTradingSession(
+      smartMoneyService,
+      tradingService,
+      dataApiClient,
+      gammaApiClient,
+      discordClient
+    );
 
     // Setup Discord event handlers
     discordClient.once(Events.ClientReady, (client) => {
@@ -136,10 +177,15 @@ async function shutdown(signal: string) {
       await copyTradingSession.stop();
     }
 
-    // Disconnect Polymarket SDK
-    if (polymarketSDK) {
-      console.log('🔌 Disconnecting Polymarket SDK...');
-      polymarketSDK.stop();
+    // Disconnect services
+    if (smartMoneyService) {
+      console.log('🔌 Disconnecting SmartMoney service...');
+      smartMoneyService.disconnect();
+    }
+
+    if (realtimeService) {
+      console.log('🔌 Disconnecting WebSocket...');
+      realtimeService.disconnect();
     }
 
     // Destroy Discord client

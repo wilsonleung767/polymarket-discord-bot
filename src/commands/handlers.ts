@@ -23,6 +23,7 @@ export async function handleStartCommand(
     const minTradeSize = interaction.options.getNumber('minsize') ?? config.trading.minTradeSize;
     const orderType = (interaction.options.getString('ordertype') as 'FOK' | 'FAK') ?? config.trading.orderType;
     const categoriesInput = interaction.options.getString('categories');
+    console.log(`📝 [DEBUG] Raw categories input from Discord: "${categoriesInput}"`);
     const totalLimit = interaction.options.getNumber('totallimit') ?? 10000000; // Default to no limit
     
     // Parse and validate categories (comma-separated)
@@ -33,13 +34,19 @@ export async function handleStartCommand(
         .map(c => c.trim().toLowerCase())
         .filter(c => c.length > 0);
       
+      console.log(`🔍 [DEBUG] After split/trim/lowercase: ${JSON.stringify(categories)}`);
+      
       // Deduplicate
       categories = [...new Set(categories)];
+      
+      console.log(`✅ [DEBUG] After deduplication: ${JSON.stringify(categories)}`);
       
       if (categories.length === 0) {
         categories = undefined;
       }
     }
+    
+    console.log(`📊 [DEBUG] Final categories value: ${categories ? JSON.stringify(categories) : 'undefined'}`);
 
     // Validate address format
     if (!targetAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
@@ -121,7 +128,7 @@ export async function handleStartCommand(
       .setTitle('✅ Copy Trading Started')
       .setColor(dryRun ? 0x95a5a6 : 0x2ecc71)
       .addFields(
-        { name: '👤 Target Trader', value: `\`${targetAddress}\``, inline: false },
+        { name: '👤 Trader', value: `\`${targetAddress}\``, inline: false },
         { name: '📢 Signal Channel', value: `<#${targetChannelId}>`, inline: true },
         { name: '🧪 Mode', value: dryRun ? 'Dry Run' : '**LIVE TRADING**', inline: true },
         { name: '📊 Size Scale', value: `${(sizeScale * 100).toFixed(1)}%`, inline: true },
@@ -180,7 +187,7 @@ export async function handleStopCommand(
       .setTitle('🛑 Copy Trading Stopped')
       .setColor(0xe74c3c)
       .addFields(
-        { name: '👤 Target Trader', value: `\`${sessionState?.config.targetAddress || 'N/A'}\``, inline: false },
+        { name: '👤 Trader', value: `\`${sessionState?.config.targetAddress || 'N/A'}\``, inline: false },
         { name: '📊 Trades Detected', value: stats?.tradesDetected.toString() || '0', inline: true },
         { name: '✅ Trades Executed', value: stats?.tradesExecuted.toString() || '0', inline: true },
         { name: '⏭️ Trades Skipped', value: stats?.tradesSkipped.toString() || '0', inline: true },
@@ -235,7 +242,7 @@ export async function handleStatusCommand(
       .setTitle('📊 Copy Trading Status')
       .setColor(sessionConfig.dryRun ? 0x95a5a6 : 0x3498db)
       .addFields(
-        { name: '👤 Target Trader', value: `\`${sessionConfig.targetAddress}\``, inline: false },
+        { name: '👤 Trader', value: `\`${sessionConfig.targetAddress}\``, inline: false },
         { name: '📢 Signal Channel', value: `<#${sessionConfig.channelId}>`, inline: true },
         { name: '🧪 Mode', value: sessionConfig.dryRun ? 'Dry Run' : '**LIVE TRADING**', inline: true },
         { name: '⏱️ Running Time', value: formatDuration(duration), inline: true },
