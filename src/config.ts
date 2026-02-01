@@ -11,6 +11,9 @@ export interface BotConfig {
   };
   polymarket: {
     privateKey: string;
+    funderAddress: string;
+    signatureType: number;
+    clobHost: string;
   };
   trading: {
     sizeScale: number;
@@ -48,6 +51,9 @@ export const config: BotConfig = {
   },
   polymarket: {
     privateKey: getEnv('POLY_PRIVATE_KEY')!,
+    funderAddress: getEnv('POLY_FUNDER')!,
+    signatureType: getEnvNumber('POLY_SIGNATURE_TYPE', 1),
+    clobHost: getEnv('POLY_CLOB_HOST', false) || 'https://clob.polymarket.com',
   },
   trading: {
     sizeScale: getEnvNumber('SIZE_SCALE', 0.1),
@@ -57,3 +63,4 @@ export const config: BotConfig = {
     orderType: (getEnv('ORDER_TYPE', false) || 'FOK') as 'FOK' | 'FAK',
   },
 };
+

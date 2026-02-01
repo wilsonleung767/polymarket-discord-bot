@@ -49,9 +49,12 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
   // Format timestamp to UTC+8
   const timestampUtc8 = toUtc8String(trade.timestamp);
 
+  // Ensure marketName is non-empty for Discord embed title
+  const displayName = marketName || marketSlug || 'Unknown Market';
+
   // Build the embed
   const embed = new EmbedBuilder()
-    .setTitle(`${dryRun ? '[DRY RUN] ' : ''}${marketName}`)
+    .setTitle(`${dryRun ? '[DRY RUN] ' : ''}${displayName}`)
     .setColor(color)
     .setTimestamp(new Date(trade.timestamp * 1000));
 

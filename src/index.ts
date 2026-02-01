@@ -1,17 +1,14 @@
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import {
-  SmartMoneyService,
-  WalletService,
   RealtimeServiceV2,
-  TradingService,
   DataApiClient,
   GammaApiClient,
-  SubgraphClient,
   RateLimiter,
   createUnifiedCache,
 } from '@catalyst-team/poly-sdk';
 import { config } from './config.js';
 import { CopyTradingSession } from './copyTrading/session.js';
+import { PolymarketClobClient } from './polymarket/clob/client.js';
 import { handleStartCommand, handleStopCommand, handleStatusCommand } from './commands/handlers.js';
 
 console.log('='.repeat(60));
@@ -21,10 +18,9 @@ console.log('='.repeat(60));
 // Global instances
 let discordClient: Client;
 let realtimeService: RealtimeServiceV2;
-let smartMoneyService: SmartMoneyService;
-let tradingService: TradingService;
 let dataApiClient: DataApiClient;
 let gammaApiClient: GammaApiClient;
+let clobClient: PolymarketClobClient;
 let copyTradingSession: CopyTradingSession;
 
 async function main() {
@@ -36,22 +32,24 @@ async function main() {
     const rateLimiter = new RateLimiter();
     dataApiClient = new DataApiClient(rateLimiter, cache);
     gammaApiClient = new GammaApiClient(rateLimiter, cache);
-    const subgraph = new SubgraphClient(rateLimiter, cache);
-    const walletService = new WalletService(dataApiClient, subgraph, cache);
-    realtimeService = new RealtimeServiceV2();
-    tradingService = new TradingService(rateLimiter, cache, {
-      privateKey: config.polymarket.privateKey,
-      chainId: 137,
-    });
 
-    smartMoneyService = new SmartMoneyService(
-      walletService,
-      realtimeService,
-      tradingService
+    // Initialize CLOB client
+    console.log('🔧 Initializing CLOB client...');
+    clobClient = new PolymarketClobClient(
+      config.polymarket.clobHost,
+      137, // Polygon mainnet
+      config.polymarket.privateKey,
+      config.polymarket.funderAddress,
+      config.polymarket.signatureType
     );
+    
+    await clobClient.initialize();
+    console.log(`  CLOB wallet: ${clobClient.getAddress()}`);
+    console.log('✅ CLOB client initialized');
 
-    const ourAddress = tradingService.getAddress().toLowerCase();
-    console.log(`  Our wallet: ${ourAddress.slice(0, 10)}...${ourAddress.slice(-6)}`);
+    // Initialize realtime service
+    realtimeService = new RealtimeServiceV2();
+
     console.log('✅ Services initialized');
 
     // Connect WebSocket with explicit wait
@@ -99,11 +97,11 @@ async function main() {
 
     // Initialize copy trading session manager
     copyTradingSession = new CopyTradingSession(
-      smartMoneyService,
-      tradingService,
+      realtimeService,
       dataApiClient,
       gammaApiClient,
-      discordClient
+      discordClient,
+      clobClient
     );
 
     // Setup Discord event handlers
@@ -177,12 +175,7 @@ async function shutdown(signal: string) {
       await copyTradingSession.stop();
     }
 
-    // Disconnect services
-    if (smartMoneyService) {
-      console.log('🔌 Disconnecting SmartMoney service...');
-      smartMoneyService.disconnect();
-    }
-
+    // Disconnect realtime service
     if (realtimeService) {
       console.log('🔌 Disconnecting WebSocket...');
       realtimeService.disconnect();

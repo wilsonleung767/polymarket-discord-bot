@@ -1,7 +1,12 @@
-import type { SmartMoneyService, TradingService, DataApiClient, GammaApiClient, AutoCopyTradingSubscription, SmartMoneyTrade, OrderResult } from '@catalyst-team/poly-sdk';
+import type { RealtimeServiceV2, DataApiClient, GammaApiClient, ActivityTrade } from '@catalyst-team/poly-sdk';
 import type { Client, TextChannel } from 'discord.js';
+import { ClobClient } from '@polymarket/clob-client';
 import { MarketCache } from '../markets/cache.js';
 import { formatTradeMessage } from '../format/tradeMessage.js';
+import { PolymarketClobClient } from '../polymarket/clob/client.js';
+import { MarketMetadataResolver } from '../polymarket/markets.js';
+import { ClobExecutor, type CopyTradingConfig } from './clobExecutor.js';
+import { config as appConfig } from '../config.js';
 
 export interface SessionConfig {
   targetAddress: string;
@@ -19,7 +24,7 @@ export interface SessionConfig {
 
 export interface SessionState {
   config: SessionConfig;
-  subscription: AutoCopyTradingSubscription;
+  subscription: { unsubscribe: () => void };
   startTime: number;
   cumulativeSpent: number;
 }
@@ -29,27 +34,43 @@ export interface SessionState {
  * Only one active session allowed at a time
  */
 export class CopyTradingSession {
-  private smartMoneyService: SmartMoneyService;
-  private tradingService: TradingService;
+  private realtimeService: RealtimeServiceV2;
   private dataApiClient: DataApiClient;
   private gammaApiClient: GammaApiClient;
   private discordClient: Client;
   private marketCache: MarketCache;
+  private clobClient: PolymarketClobClient;
+  private marketResolver: MarketMetadataResolver;
+  private clobExecutor: ClobExecutor;
   private activeSession: SessionState | null = null;
+  private seenTransactions: Set<string> = new Set();
 
   constructor(
-    smartMoneyService: SmartMoneyService,
-    tradingService: TradingService,
+    realtimeService: RealtimeServiceV2,
     dataApiClient: DataApiClient,
     gammaApiClient: GammaApiClient,
-    discordClient: Client
+    discordClient: Client,
+    clobClient: PolymarketClobClient
   ) {
-    this.smartMoneyService = smartMoneyService;
-    this.tradingService = tradingService;
+    this.realtimeService = realtimeService;
     this.dataApiClient = dataApiClient;
     this.gammaApiClient = gammaApiClient;
     this.discordClient = discordClient;
     this.marketCache = new MarketCache(gammaApiClient);
+    this.clobClient = clobClient;
+    
+    // Initialize CLOB client with raw ClobClient for metadata resolver
+    const rawClobClient = new ClobClient(
+      appConfig.polymarket.clobHost,
+      137, // Polygon mainnet
+      undefined, // No signer needed for read-only ops
+      undefined,
+      undefined,
+      undefined
+    );
+    
+    this.marketResolver = new MarketMetadataResolver(gammaApiClient, rawClobClient);
+    this.clobExecutor = new ClobExecutor(clobClient, this.marketResolver);
   }
   
   /**
@@ -67,6 +88,26 @@ export class CopyTradingSession {
   }
 
   /**
+   * Check if transaction hash has been seen (deduplication)
+   */
+  private isSeenTransaction(txHash: string): boolean {
+    if (this.seenTransactions.has(txHash)) {
+      return true;
+    }
+    this.seenTransactions.add(txHash);
+    
+    // Keep only last 2000 transactions
+    if (this.seenTransactions.size > 2000) {
+      const firstItem = this.seenTransactions.values().next().value;
+      if (firstItem) {
+        this.seenTransactions.delete(firstItem);
+      }
+    }
+    
+    return false;
+  }
+
+  /**
    * Start a new copy trading session
    */
   async start(config: SessionConfig): Promise<void> {
@@ -81,22 +122,27 @@ export class CopyTradingSession {
 
     try {
       // Add delay to ensure WebSocket connection is fully registered on Polymarket's backend
-      // This prevents foreign key constraint violations when subscribing to activity trades
       console.log('⏳ Waiting 1 second for WebSocket connection to stabilize...');
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      // Start auto copy trading
-      const subscription = await this.smartMoneyService.startAutoCopyTrading({
-        targetAddresses: [config.targetAddress],
-        sizeScale: config.sizeScale,
-        maxSizePerTrade: config.maxSizePerTrade,
-        maxSlippage: config.maxSlippage,
-        minTradeSize: config.minTradeSize,
-        orderType: config.orderType,
-        dryRun: config.dryRun,
-        onTrade: async (trade: SmartMoneyTrade, result: OrderResult) => {
-          console.log(`🎯 Trade detected from ${trade.traderAddress}: ${trade.side} ${trade.outcome} @ $${trade.price}`);
-          await this.handleTrade(trade, result, config);
+      // Subscribe to all activity and filter by target address
+      const targetAddress = config.targetAddress.toLowerCase();
+      
+      const subscription = this.realtimeService.subscribeAllActivity({
+        onTrade: async (trade: ActivityTrade) => {
+          // Filter by target address
+          const traderAddress = trade.trader?.address?.toLowerCase();
+          if (!traderAddress || traderAddress !== targetAddress) {
+            return;
+          }
+          
+          // Deduplicate by transaction hash
+          if (this.isSeenTransaction(trade.transactionHash)) {
+            return;
+          }
+          
+          console.log(`🎯 Trade detected from ${traderAddress}: ${trade.side} ${trade.outcome} @ $${trade.price}`);
+          await this.handleTrade(trade, config);
         },
         onError: (error: Error) => {
           console.error('❌ Copy trading error:', error.message);
@@ -112,9 +158,7 @@ export class CopyTradingSession {
         cumulativeSpent: 0,
       };
 
-      console.log(`Session started successfully. Tracking ${subscription.targetAddresses.length} address(es)`);
-      console.log(`Target addresses: ${subscription.targetAddresses.join(', ')}`);
-      console.log(`Listening for trades from: ${config.targetAddress}`);
+      console.log(`Session started successfully. Tracking: ${config.targetAddress}`);
       console.log(`Min trade size: $${config.minTradeSize}, Max per trade: $${config.maxSizePerTrade}`);
     } catch (error) {
       console.error('Failed to start copy trading session:', error);
@@ -134,8 +178,9 @@ export class CopyTradingSession {
     console.log('Stopping copy trading session');
     
     try {
-      this.activeSession.subscription.stop();
+      this.activeSession.subscription.unsubscribe();
       this.activeSession = null;
+      this.seenTransactions.clear();
       console.log('Session stopped successfully');
     } catch (error) {
       console.error('Error stopping session:', error);
@@ -148,13 +193,13 @@ export class CopyTradingSession {
    * Handle a trade event
    */
   private async handleTrade(
-    trade: SmartMoneyTrade,
-    result: OrderResult,
+    trade: ActivityTrade,
     config: SessionConfig
   ): Promise<void> {
     try {
-      // Fetch market info (using marketSlug from trade object)
-      const marketInfo = await this.marketCache.getMarketInfo(trade?.marketSlug ?? '');
+      // Fetch market info (using eventSlug from trade object, fallback to marketSlug)
+      const slugToFetch = trade?.eventSlug || trade?.marketSlug || '';
+      const marketInfo = await this.marketCache.getMarketInfo(slugToFetch, trade?.marketSlug ?? '');
 
       // Filter by categories if specified
       if (config.categories && config.categories.length > 0) {
@@ -173,19 +218,36 @@ export class CopyTradingSession {
       // Calculate amounts
       const leaderNotional = trade.size * trade.price;
       
-      // Compute copy amount using same logic as SDK
-      let copySize = trade.size * config.sizeScale;
-      let copyValue = copySize * trade.price;
-      
-      // Enforce max size
-      if (copyValue > config.maxSizePerTrade) {
-        copySize = config.maxSizePerTrade / trade.price;
-        copyValue = config.maxSizePerTrade;
+      // Build copy trading config
+      const copyConfig: CopyTradingConfig = {
+        sizeScale: config.sizeScale,
+        maxSizePerTrade: config.maxSizePerTrade,
+        minTradeSize: config.minTradeSize,
+        maxSlippage: config.maxSlippage,
+        orderType: config.orderType,
+      };
+
+      // Execute copy trade (or skip in dry run mode)
+      let executionResult;
+      if (config.dryRun) {
+        // In dry run, calculate copy amount but don't execute
+        let copyUsdcAmount = leaderNotional * config.sizeScale;
+        if (copyUsdcAmount > config.maxSizePerTrade) {
+          copyUsdcAmount = config.maxSizePerTrade;
+        }
+        
+        executionResult = {
+          success: true,
+          copyUsdcAmount,
+        };
+      } else {
+        // Execute real trade
+        executionResult = await this.clobExecutor.execute(trade, copyConfig);
       }
 
-      const copyUsdcAmount = copyValue;
+      const copyUsdcAmount = executionResult.copyUsdcAmount;
 
-      // Check total limit before executing
+      // Check total limit before tracking spending
       if (config.totalLimit && this.activeSession) {
         const newTotal = this.activeSession.cumulativeSpent + copyUsdcAmount;
         
@@ -209,10 +271,30 @@ export class CopyTradingSession {
         this.activeSession.cumulativeSpent += copyUsdcAmount;
       }
 
+      // Format result for Discord embed (adapt to old format)
+      const adaptedResult = {
+        success: executionResult.success,
+        orderId: executionResult.orderResponse?.orderId,
+        errorMsg: executionResult.error,
+      };
+
+      // Convert ActivityTrade to SmartMoneyTrade format for formatting
+      const adaptedTrade = {
+        traderAddress: trade.trader?.address || '',
+        traderName: trade.trader?.name,
+        side: trade.side,
+        outcome: trade.outcome,
+        price: trade.price,
+        size: trade.size,
+        timestamp: Math.floor(trade.timestamp / 1000), // Convert to seconds
+        txHash: trade.transactionHash,
+        marketSlug: trade.marketSlug,
+      };
+
       // Format and send message
       const embed = formatTradeMessage({
-        trade,
-        result,
+        trade: adaptedTrade as any,
+        result: adaptedResult as any,
         marketName: marketInfo.name,
         marketSlug: marketInfo.slug,
         leaderNotional,
@@ -256,6 +338,13 @@ export class CopyTradingSession {
     if (!this.activeSession) {
       return null;
     }
-    return this.activeSession.subscription.getStats();
+    
+    // Return basic session stats (without SDK getStats method)
+    return {
+      startTime: this.activeSession.startTime,
+      targetAddress: this.activeSession.config.targetAddress,
+      cumulativeSpent: this.activeSession.cumulativeSpent,
+      dryRun: this.activeSession.config.dryRun,
+    };
   }
 }

@@ -188,11 +188,7 @@ export async function handleStopCommand(
       .setColor(0xe74c3c)
       .addFields(
         { name: '👤 Trader', value: `\`${sessionState?.config.targetAddress || 'N/A'}\``, inline: false },
-        { name: '📊 Trades Detected', value: stats?.tradesDetected.toString() || '0', inline: true },
-        { name: '✅ Trades Executed', value: stats?.tradesExecuted.toString() || '0', inline: true },
-        { name: '⏭️ Trades Skipped', value: stats?.tradesSkipped.toString() || '0', inline: true },
-        { name: '❌ Trades Failed', value: stats?.tradesFailed.toString() || '0', inline: true },
-        { name: '💰 Total USDC Spent', value: `$${stats?.totalUsdcSpent.toFixed(2) || '0.00'}`, inline: true },
+        { name: '💰 Total USDC Spent', value: `$${stats?.cumulativeSpent.toFixed(2) || '0.00'}`, inline: true },
         { name: '⏱️ Session Duration', value: sessionState ? formatDuration(Date.now() - sessionState.startTime) : 'N/A', inline: true },
         { name: '🛑 Stopped By', value: `<@${interaction.user.id}>`, inline: false }
       )
@@ -250,13 +246,8 @@ export async function handleStatusCommand(
         { name: '💰 Max Per Trade', value: `$${sessionConfig.maxSizePerTrade}`, inline: true },
         { name: '📋 Order Type', value: sessionConfig.orderType, inline: true },
         { name: '🏷️ Categories', value: sessionConfig.categories && sessionConfig.categories.length > 0 ? sessionConfig.categories.join(', ') : 'All', inline: true },
-        { name: '� Total Limit', value: sessionConfig.totalLimit ? `$${sessionConfig.totalLimit}` : 'Unlimited', inline: true },
+        { name: '💵 Total Limit', value: sessionConfig.totalLimit ? `$${sessionConfig.totalLimit}` : 'Unlimited', inline: true },
         { name: '💸 Cumulative Spent', value: `$${sessionState.cumulativeSpent.toFixed(2)}`, inline: true },
-        { name: '�📈 Detected', value: stats.tradesDetected.toString(), inline: true },
-        { name: '✅ Executed', value: stats.tradesExecuted.toString(), inline: true },
-        { name: '⏭️ Skipped', value: stats.tradesSkipped.toString(), inline: true },
-        { name: '❌ Failed', value: stats.tradesFailed.toString(), inline: true },
-        { name: '💰 Total Spent', value: `$${stats.totalUsdcSpent.toFixed(2)}`, inline: true },
         { name: '👷 Started By', value: `<@${sessionConfig.startedByUserId}>`, inline: true }
       )
       .setTimestamp();

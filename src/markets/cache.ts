@@ -57,23 +57,26 @@ export class MarketCache {
   /**
    * Get market info by event slug, with caching
    * Fetches tags from Gamma API for accurate category filtering
+   * @param eventSlug - Primary slug to fetch (preferably eventSlug)
+   * @param fallbackSlug - Fallback slug if name is empty (e.g., marketSlug)
    */
-  async getMarketInfo(marketSlug: string): Promise<MarketInfo> {
+  async getMarketInfo(eventSlug: string, fallbackSlug?: string): Promise<MarketInfo> {
     // Check cache first
-    const cached = this.cache.get(marketSlug);
+    const cacheKey = eventSlug || fallbackSlug || '';
+    const cached = this.cache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
     let tags: string[] = [];
     let name = '';
-    let slug = marketSlug;
+    let slug = eventSlug || fallbackSlug || '';
     
     // If we have a slug, fetch from Gamma API to get tags and name
-    if (marketSlug) {
+    if (slug) {
       try {
-        console.log(`🔍 [DEBUG] Fetching market tags from Gamma API for marketSlug: ${marketSlug}`);
-        const gammaEvent = await fetchGammaEventBySlug(marketSlug);
+        console.log(`🔍 [DEBUG] Fetching market tags from Gamma API for eventSlug: ${slug}`);
+        const gammaEvent = await fetchGammaEventBySlug(slug);
         if (gammaEvent) {
           // Extract tag slugs (e.g. "league-of-legends", "esports")
           tags = (gammaEvent.tags ?? [])
@@ -81,16 +84,22 @@ export class MarketCache {
             .filter((v): v is string => Boolean(v));
           
           name = gammaEvent.title ?? gammaEvent.slug ?? '';
-          slug = gammaEvent.slug ?? marketSlug;
+          slug = gammaEvent.slug ?? slug;
           
           console.log(`✅ [DEBUG] Fetched tags: ${JSON.stringify(tags)}`);
           console.log(`✅ [DEBUG] Fetched name: ${name}`);
         } else {
-          console.warn(`⚠️ [WARN] Gamma API returned null for marketSlug: ${marketSlug}`);
+          console.warn(`⚠️ [WARN] Gamma API returned null for eventSlug: ${slug}`);
         }
       } catch (error) {
-        console.error(`❌ [ERROR] Failed to fetch tags from Gamma API for ${marketSlug}:`, error);
+        console.error(`❌ [ERROR] Failed to fetch tags from Gamma API for ${slug}:`, error);
       }
+    }
+    
+    // If name is still empty, use fallback
+    if (!name && fallbackSlug) {
+      name = fallbackSlug;
+      console.log(`📝 [DEBUG] Using fallback name: ${fallbackSlug}`);
     }
     
     const info: MarketInfo = {
@@ -100,7 +109,7 @@ export class MarketCache {
     };
     
     // Cache it
-    this.cache.set(marketSlug, info);
+    this.cache.set(cacheKey, info);
     return info;
   }
 

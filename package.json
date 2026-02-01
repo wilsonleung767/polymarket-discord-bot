@@ -9,7 +9,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "register-commands": "tsx src/commands/register.ts",
-    "test-websocket": "tsx src/test-websocket.ts"
+    "test-websocket": "tsx src/test-websocket.ts",
+    "test-clob": "tsx src/test-clob-order.ts",
+    "swap": "tsx src/swap-usdc.ts"
   },
   "keywords": [
     "discord",
@@ -21,8 +23,10 @@
   "license": "MIT",
   "dependencies": {
     "@catalyst-team/poly-sdk": "^0.3.0",
+    "@polymarket/clob-client": "^5.2.1",
     "discord.js": "^14.14.1",
-    "dotenv": "^16.4.1"
+    "dotenv": "^16.4.1",
+    "ethers": "^6.16.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
