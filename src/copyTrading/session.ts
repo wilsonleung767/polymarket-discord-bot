@@ -20,6 +20,8 @@ export interface SessionConfig {
   orderType: 'FOK' | 'FAK';
   categories?: string[];
   totalLimit?: number;
+  maxOdds?: number; // Max odds (price) for BUY trades only
+  maxTotalPerMarket?: number; // Max total USDC per market (BUY trades only)
 }
 
 export interface SessionState {
@@ -27,6 +29,7 @@ export interface SessionState {
   subscription: { unsubscribe: () => void };
   startTime: number;
   cumulativeSpent: number;
+  spentByMarket: Map<string, number>; // Track USDC spent per market slug (for BUY trades)
 }
 
 /**
@@ -156,6 +159,7 @@ export class CopyTradingSession {
         subscription,
         startTime: Date.now(),
         cumulativeSpent: 0,
+        spentByMarket: new Map<string, number>(),
       };
 
       console.log(`Session started successfully. Tracking: ${config.targetAddress}`);
@@ -197,6 +201,27 @@ export class CopyTradingSession {
     config: SessionConfig
   ): Promise<void> {
     try {
+      // Check max odds limit for BUY trades
+      if (config.maxOdds !== undefined && trade.side === 'BUY' && trade.price > config.maxOdds) {
+        console.log(`⏭️ Skipping BUY trade - price ${trade.price} exceeds max odds ${config.maxOdds}`);
+        
+        // Optionally send a small notification to the channel
+        try {
+          const channel = await this.discordClient.channels.fetch(config.channelId);
+          if (channel?.isTextBased()) {
+            await (channel as TextChannel).send({
+              content: `⏭️ **Trade Skipped (Max Odds Exceeded)**\n` +
+                       `BUY ${trade.outcome} @ $${trade.price.toFixed(2)} > max $${config.maxOdds.toFixed(2)}\n` +
+                       `Target: \`${config.targetAddress.slice(0, 8)}...\``,
+            });
+          }
+        } catch (notifyError) {
+          console.error('Failed to send max odds skip notification:', notifyError);
+        }
+        
+        return;
+      }
+
       // Fetch market info (using eventSlug from trade object, fallback to marketSlug)
       const slugToFetch = trade?.eventSlug || trade?.marketSlug || '';
       const marketInfo = await this.marketCache.getMarketInfo(slugToFetch, trade?.marketSlug ?? '');
@@ -217,6 +242,41 @@ export class CopyTradingSession {
 
       // Calculate amounts
       const leaderNotional = trade.size * trade.price;
+      
+      // Pre-compute planned copy USDC amount
+      let plannedCopyUsdcAmount = leaderNotional * config.sizeScale;
+      if (plannedCopyUsdcAmount > config.maxSizePerTrade) {
+        plannedCopyUsdcAmount = config.maxSizePerTrade;
+      }
+
+      // Check per-market limit for BUY trades
+      if (config.maxTotalPerMarket !== undefined && trade.side === 'BUY' && this.activeSession) {
+        const currentMarketSpent = this.activeSession.spentByMarket.get(marketInfo.slug) ?? 0;
+        const projectedMarketTotal = currentMarketSpent + plannedCopyUsdcAmount;
+
+        if (projectedMarketTotal > config.maxTotalPerMarket) {
+          console.log(`⏭️ Skipping BUY trade - market cap reached for ${marketInfo.slug}`);
+          console.log(`   Current: $${currentMarketSpent.toFixed(2)}, Planned: $${plannedCopyUsdcAmount.toFixed(2)}, Cap: $${config.maxTotalPerMarket}`);
+          
+          // Send notification to channel
+          try {
+            const channel = await this.discordClient.channels.fetch(config.channelId);
+            if (channel?.isTextBased()) {
+              await (channel as TextChannel).send({
+                content: `⏭️ **Trade Skipped (Market Cap Reached)**\n` +
+                         `Market: ${marketInfo.name}\n` +
+                         `Current spent: $${currentMarketSpent.toFixed(2)}\n` +
+                         `Trade amount: $${plannedCopyUsdcAmount.toFixed(2)}\n` +
+                         `Market cap: $${config.maxTotalPerMarket}`,
+              });
+            }
+          } catch (notifyError) {
+            console.error('Failed to send market cap skip notification:', notifyError);
+          }
+          
+          return;
+        }
+      }
       
       // Build copy trading config
       const copyConfig: CopyTradingConfig = {
@@ -269,6 +329,13 @@ export class CopyTradingSession {
         
         // Update cumulative spending (even in dry run for tracking)
         this.activeSession.cumulativeSpent += copyUsdcAmount;
+        
+        // Update per-market spending for BUY trades
+        if (trade.side === 'BUY') {
+          const currentMarketSpent = this.activeSession.spentByMarket.get(marketInfo.slug) ?? 0;
+          this.activeSession.spentByMarket.set(marketInfo.slug, currentMarketSpent + copyUsdcAmount);
+          console.log(`📊 Market spending updated for ${marketInfo.slug}: $${(currentMarketSpent + copyUsdcAmount).toFixed(2)}`);
+        }
       }
 
       // Format result for Discord embed (adapt to old format)

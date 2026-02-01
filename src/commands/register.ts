@@ -76,6 +76,21 @@ const commands = [
         .setMinValue(1)
         .setRequired(false)
     )
+    .addNumberOption(option =>
+      option
+        .setName('maxodds')
+        .setDescription('Max odds (price) for BUY trades (0.01-0.99, e.g., 0.75 for 75%)')
+        .setMinValue(0.01)
+        .setMaxValue(0.99)
+        .setRequired(false)
+    )
+    .addNumberOption(option =>
+      option
+        .setName('marketlimit')
+        .setDescription('Max total USDC per market (BUY trades only, default: unlimited)')
+        .setMinValue(1)
+        .setRequired(false)
+    )
     .toJSON(),
 
   new SlashCommandBuilder()

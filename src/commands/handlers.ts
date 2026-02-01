@@ -25,6 +25,8 @@ export async function handleStartCommand(
     const categoriesInput = interaction.options.getString('categories');
     console.log(`📝 [DEBUG] Raw categories input from Discord: "${categoriesInput}"`);
     const totalLimit = interaction.options.getNumber('totallimit') ?? 10000000; // Default to no limit
+    const maxOdds = interaction.options.getNumber('maxodds'); // Optional max odds for BUY trades
+    const maxTotalPerMarket = interaction.options.getNumber('marketlimit') ?? undefined; // Optional per-market cap
     
     // Parse and validate categories (comma-separated)
     let categories: string[] | undefined;
@@ -121,6 +123,8 @@ export async function handleStartCommand(
       orderType,
       categories,
       totalLimit,
+      maxOdds: maxOdds !== null ? Math.round(maxOdds * 100) / 100 : undefined, // Round to 2 decimals
+      maxTotalPerMarket,
     });
 
     // Send success message
@@ -137,8 +141,10 @@ export async function handleStartCommand(
         { name: '🎯 Min Trade Size', value: `$${minTradeSize}`, inline: true },
         { name: '📋 Order Type', value: orderType, inline: true },
         { name: '🏷️ Categories', value: categories && categories.length > 0 ? categories.join(', ') : 'All', inline: true },
-        { name: '� Total Limit', value: totalLimit ? `$${totalLimit}` : 'Unlimited', inline: true },
-        { name: '�👷 Started By', value: `<@${interaction.user.id}>`, inline: true }
+        { name: '💵 Total Limit', value: totalLimit ? `$${totalLimit}` : 'Unlimited', inline: true },
+        { name: '🎯 Max Odds (BUY)', value: maxOdds !== null ? `${(maxOdds * 100).toFixed(0)}% ($${maxOdds.toFixed(2)})` : 'None', inline: true },
+        { name: '🔒 Market Limit', value: maxTotalPerMarket ? `$${maxTotalPerMarket}` : 'None', inline: true },
+        { name: '👷 Started By', value: `<@${interaction.user.id}>`, inline: true }
       )
       .setTimestamp();
 
@@ -234,6 +240,15 @@ export async function handleStatusCommand(
     const { config: sessionConfig } = sessionState;
     const duration = Date.now() - sessionState.startTime;
 
+    // Get max odds from session config (if any)
+    const maxOddsDisplay = sessionConfig.maxOdds !== undefined 
+      ? `${(sessionConfig.maxOdds * 100).toFixed(0)}% ($${sessionConfig.maxOdds.toFixed(2)})` 
+      : 'None';
+
+    const marketLimitDisplay = sessionConfig.maxTotalPerMarket 
+      ? `$${sessionConfig.maxTotalPerMarket}` 
+      : 'None';
+
     const embed = new EmbedBuilder()
       .setTitle('📊 Copy Trading Status')
       .setColor(sessionConfig.dryRun ? 0x95a5a6 : 0x3498db)
@@ -248,6 +263,8 @@ export async function handleStatusCommand(
         { name: '🏷️ Categories', value: sessionConfig.categories && sessionConfig.categories.length > 0 ? sessionConfig.categories.join(', ') : 'All', inline: true },
         { name: '💵 Total Limit', value: sessionConfig.totalLimit ? `$${sessionConfig.totalLimit}` : 'Unlimited', inline: true },
         { name: '💸 Cumulative Spent', value: `$${sessionState.cumulativeSpent.toFixed(2)}`, inline: true },
+        { name: '🎯 Max Odds (BUY)', value: maxOddsDisplay, inline: true },
+        { name: '🔒 Market Limit', value: marketLimitDisplay, inline: true },
         { name: '👷 Started By', value: `<@${sessionConfig.startedByUserId}>`, inline: true }
       )
       .setTimestamp();

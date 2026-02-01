@@ -45,10 +45,6 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
   } else {
     color = trade.side === 'BUY' ? 0x2ecc71 : 0xe74c3c; // Green for buy, red for sell
   }
-
-  // Format timestamp to UTC+8
-  const timestampUtc8 = toUtc8String(trade.timestamp);
-
   // Ensure marketName is non-empty for Discord embed title
   const displayName = marketName || marketSlug || 'Unknown Market';
 
