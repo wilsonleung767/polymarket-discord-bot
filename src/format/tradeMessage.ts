@@ -60,12 +60,14 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
   }
 
   // Add fields
+  const traderDisplay = trade.traderName
+    ? `[${trade.traderName}](https://polymarket.com/@${trade.traderName})`
+    : `\`${trade.traderAddress.slice(0, 10)}...${trade.traderAddress.slice(-8)}\``;
+  
   embed.addFields(
     {
       name: '👤 Trader',
-      value: trade.traderName 
-        ? `[${trade.traderName}](https://polymarket.com/@${trade.traderName})`
-        : `\`${trade.traderAddress}\``,
+      value: traderDisplay,
       inline: true,
     },
     {

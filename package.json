@@ -22,7 +22,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@catalyst-team/poly-sdk": "^0.3.0",
+    "@catalyst-team/poly-sdk": "^0.4.6",
     "@polymarket/clob-client": "^5.2.1",
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.1",
