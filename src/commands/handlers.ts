@@ -64,21 +64,10 @@ export async function handleStartCommand(
         `🔍 [DEBUG] After split/trim/lowercase: ${JSON.stringify(categories)}`,
       );
 
-      // Deduplicate
-      categories = [...new Set(categories)];
-
-      console.log(
-        `✅ [DEBUG] After deduplication: ${JSON.stringify(categories)}`,
-      );
-
       if (categories.length === 0) {
         categories = undefined;
       }
     }
-
-    console.log(
-      `📊 [DEBUG] Final categories value: ${categories ? JSON.stringify(categories) : "undefined"}`,
-    );
 
     // Validate address format
     if (!targetAddress.match(/^0x[a-fA-F0-9]{40}$/)) {
@@ -162,10 +151,11 @@ export async function handleStartCommand(
     });
 
     // Send success message
-    const traderDisplay = traderProfile.userName && traderProfile.profileUrl
-      ? `[${traderProfile.userName}](${traderProfile.profileUrl})`
-      : `\`${targetAddress.slice(0, 10)}...${targetAddress.slice(-8)}\``;
-    
+    const traderDisplay =
+      traderProfile.userName && traderProfile.profileUrl
+        ? `[${traderProfile.userName}](${traderProfile.profileUrl})`
+        : `\`${targetAddress.slice(0, 10)}...${targetAddress.slice(-8)}\``;
+
     const embed = new EmbedBuilder()
       .setTitle("✅ Copy Trading Started")
       .setColor(dryRun ? 0x95a5a6 : 0x2ecc71)
@@ -275,10 +265,11 @@ export async function handleStopCommand(
 
     // Send summary
     const targetAddress = sessionState?.config.targetAddress || "N/A";
-    const traderDisplay = targetAddress !== "N/A"
-      ? `\`${targetAddress.slice(0, 10)}...${targetAddress.slice(-8)}\``
-      : "N/A";
-    
+    const traderDisplay =
+      targetAddress !== "N/A"
+        ? `\`${targetAddress.slice(0, 10)}...${targetAddress.slice(-8)}\``
+        : "N/A";
+
     const embed = new EmbedBuilder()
       .setTitle("🛑 Copy Trading Stopped")
       .setColor(0xe74c3c)
@@ -361,6 +352,25 @@ export async function handleStatusCommand(
 
     const traderDisplay = `\`${sessionConfig.targetAddress.slice(0, 10)}...${sessionConfig.targetAddress.slice(-8)}\``;
 
+    // Format spend by market - sort by spend descending, show top 5
+    let spendByMarketDisplay = "None";
+    if (stats.spentByMarket && stats.spentByMarket.length > 0) {
+      const sortedMarkets = [...stats.spentByMarket].sort(
+        (a, b) => b.spent - a.spent,
+      );
+      const topMarkets = sortedMarkets.slice(0, 5);
+      const lines = topMarkets.map(
+        ({ market, spent }) => `• ${market}: $${spent.toFixed(2)}`,
+      );
+
+      if (sortedMarkets.length > 5) {
+        const remaining = sortedMarkets.length - 5;
+        lines.push(`_...and ${remaining} more_`);
+      }
+
+      spendByMarketDisplay = lines.join("\n");
+    }
+
     const embed = new EmbedBuilder()
       .setTitle("📊 Copy Trading Status")
       .setColor(sessionConfig.dryRun ? 0x95a5a6 : 0x3498db)
@@ -369,11 +379,6 @@ export async function handleStatusCommand(
           name: "👤 Trader",
           value: traderDisplay,
           inline: false,
-        },
-        {
-          name: "📢 Signal Channel",
-          value: `<#${sessionConfig.channelId}>`,
-          inline: true,
         },
         {
           name: "🧪 Mode",
@@ -405,19 +410,21 @@ export async function handleStatusCommand(
           inline: true,
         },
         {
-          name: "💵 Total Limit",
-          value: sessionConfig.totalLimit
-            ? `$${sessionConfig.totalLimit}`
-            : "Unlimited",
-          inline: true,
-        },
-        {
           name: "💸 Cumulative Spent",
           value: `$${sessionState.cumulativeSpent.toFixed(2)}`,
           inline: true,
         },
-        { name: "🎯 Max Odds (BUY)", value: maxOddsDisplay, inline: true },
+        {
+          name: "⏭️ Skipped Trades",
+          value: `${stats.skippedCount || 0}`,
+          inline: true,
+        },
         { name: "🔒 Market Limit", value: marketLimitDisplay, inline: true },
+        {
+          name: "📊 Spend By Market",
+          value: spendByMarketDisplay,
+          inline: false,
+        },
         {
           name: "👷 Started By",
           value: `<@${sessionConfig.startedByUserId}>`,

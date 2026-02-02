@@ -35,6 +35,7 @@ export interface SessionState {
   startTime: number;
   cumulativeSpent: number;
   spentByMarket: Map<string, number>; // Track USDC spent per market slug (for BUY trades)
+  skippedCount: number; // Track number of trades skipped due to filters
 }
 
 /**
@@ -172,6 +173,7 @@ export class CopyTradingSession {
         startTime: Date.now(),
         cumulativeSpent: 0,
         spentByMarket: new Map<string, number>(),
+        skippedCount: 0,
       };
 
       console.log(
@@ -227,6 +229,11 @@ export class CopyTradingSession {
           `⏭️ Skipping BUY trade - price ${trade.price} exceeds max odds ${config.maxOdds}`,
         );
 
+        // Increment skip counter
+        if (this.activeSession) {
+          this.activeSession.skippedCount++;
+        }
+
         // Optionally send a small notification to the channel
         try {
           const channel = await this.discordClient.channels.fetch(
@@ -275,6 +282,12 @@ export class CopyTradingSession {
           console.log(
             `⏭️ Skipping trade - market tags [${marketInfo.tags.join(", ")}] don't match filter [${config.categories.join(", ")}]`,
           );
+          
+          // Increment skip counter
+          if (this.activeSession) {
+            this.activeSession.skippedCount++;
+          }
+          
           return;
         }
       }
@@ -305,6 +318,11 @@ export class CopyTradingSession {
           console.log(
             `   Current: $${currentMarketSpent.toFixed(2)}, Planned: $${plannedCopyUsdcAmount.toFixed(2)}, Cap: $${config.maxTotalPerMarket}`,
           );
+
+          // Increment skip counter
+          if (this.activeSession) {
+            this.activeSession.skippedCount++;
+          }
 
           // Send notification to channel
           try {
@@ -470,12 +488,19 @@ export class CopyTradingSession {
       return null;
     }
 
+    // Convert Map to array for JSON serialization
+    const spentByMarket = Array.from(
+      this.activeSession.spentByMarket.entries(),
+    ).map(([market, spent]) => ({ market, spent }));
+
     // Return basic session stats (without SDK getStats method)
     return {
       startTime: this.activeSession.startTime,
       targetAddress: this.activeSession.config.targetAddress,
       cumulativeSpent: this.activeSession.cumulativeSpent,
       dryRun: this.activeSession.config.dryRun,
+      skippedCount: this.activeSession.skippedCount,
+      spentByMarket,
     };
   }
 }
