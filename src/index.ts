@@ -1,10 +1,12 @@
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import {
-  RealtimeServiceV2,
   DataApiClient,
   GammaApiClient,
   RateLimiter,
   createUnifiedCache,
+  SmartMoneyService,
+  WalletService,
+  SubgraphClient,
 } from '@catalyst-team/poly-sdk';
 import { config } from './config.js';
 import { CopyTradingSession } from './copyTrading/session.js';
@@ -17,10 +19,10 @@ console.log('='.repeat(60));
 
 // Global instances
 let discordClient: Client;
-let realtimeService: RealtimeServiceV2;
 let dataApiClient: DataApiClient;
 let gammaApiClient: GammaApiClient;
 let clobClient: PolymarketClobClient;
+let smartMoneyService: SmartMoneyService;
 let copyTradingSession: CopyTradingSession;
 
 async function main() {
@@ -32,6 +34,7 @@ async function main() {
     const rateLimiter = new RateLimiter();
     dataApiClient = new DataApiClient(rateLimiter, cache);
     gammaApiClient = new GammaApiClient(rateLimiter, cache);
+    const subgraph = new SubgraphClient(rateLimiter, cache);
 
     // Initialize CLOB client
     console.log('🔧 Initializing CLOB client...');
@@ -47,44 +50,18 @@ async function main() {
     console.log(`  CLOB wallet: ${clobClient.getAddress()}`);
     console.log('✅ CLOB client initialized');
 
-    // Initialize realtime service
-    realtimeService = new RealtimeServiceV2();
+    // Initialize SmartMoneyService for Data API polling
+    console.log('🔧 Initializing SmartMoneyService...');
+    const walletService = new WalletService(dataApiClient, subgraph, cache);
+    // Note: SmartMoneyService now requires DataApiClient (4th param) and doesn't use RealtimeServiceV2
+    smartMoneyService = new SmartMoneyService(
+      walletService,
+      null as any, // RealtimeServiceV2 no longer used for Activity
+      null as any, // TradingService not needed for our use case
+      dataApiClient // Required for Data API polling
+    );
 
     console.log('✅ Services initialized');
-
-    // Connect WebSocket with explicit wait
-    console.log('📡 Connecting to WebSocket...');
-    realtimeService.connect();
-    
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('WebSocket connection timeout after 10 seconds'));
-      }, 10000);
-      
-      realtimeService.once('connected', () => {
-        clearTimeout(timeout);
-        console.log('✅ WebSocket connected successfully');
-        resolve();
-      });
-    });
-
-    // Monitor WebSocket connection status
-    realtimeService.on('disconnected', () => {
-      console.warn('⚠️  WebSocket disconnected! Attempting to reconnect...');
-    });
-
-    realtimeService.on('connected', () => {
-      console.log('✅ WebSocket reconnected successfully');
-    });
-
-    realtimeService.on('statusChange', (status) => {
-      console.log(`📡 WebSocket status: ${status}`);
-    });
-
-    // Monitor for errors
-    realtimeService.on('error', (error: Error) => {
-      console.error('❌ WebSocket error:', error.message);
-    });
 
     // Initialize Discord client
     console.log('🔧 Initializing Discord client...');
@@ -97,7 +74,7 @@ async function main() {
 
     // Initialize copy trading session manager
     copyTradingSession = new CopyTradingSession(
-      realtimeService,
+      smartMoneyService,
       dataApiClient,
       gammaApiClient,
       discordClient,
@@ -173,12 +150,6 @@ async function shutdown(signal: string) {
     if (copyTradingSession?.isActive()) {
       console.log('🛑 Stopping active copy trading session...');
       await copyTradingSession.stop();
-    }
-
-    // Disconnect realtime service
-    if (realtimeService) {
-      console.log('🔌 Disconnecting WebSocket...');
-      realtimeService.disconnect();
     }
 
     // Destroy Discord client

@@ -3,6 +3,7 @@ import type { GammaApiClient } from '@catalyst-team/poly-sdk';
 interface MarketInfo {
   name: string;
   slug: string;
+  eventSlug?: string; // Parent event slug for constructing correct Polymarket URLs
   tags: string[];
 }
 
@@ -18,6 +19,33 @@ type GammaEventResponse = {
   title?: string;
   tags?: GammaEventTag[];
 };
+
+/**
+ * Fetch market data directly from Gamma API (raw response includes event info)
+ */
+async function fetchGammaMarketBySlug(marketSlug: string): Promise<any | null> {
+  const url = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(marketSlug)}&limit=1`;
+  
+  try {
+    const res = await fetch(url, { 
+      headers: { accept: 'application/json' } 
+    });
+
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new Error(`Gamma markets fetch failed: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      return data[0];
+    }
+    return null;
+  } catch (error) {
+    console.error(`Failed to fetch Gamma market ${marketSlug}:`, error);
+    return null;
+  }
+}
 
 /**
  * Fetch event data directly from Gamma API
@@ -71,28 +99,55 @@ export class MarketCache {
     let tags: string[] = [];
     let name = '';
     let slug = eventSlug || fallbackSlug || '';
+    let parentEventSlug: string | undefined = undefined;
     
-    // If we have a slug, fetch from Gamma API to get tags and name
+    // If we have a slug, fetch from Gamma API
     if (slug) {
       try {
-        console.log(`🔍 [DEBUG] Fetching market tags from Gamma API for eventSlug: ${slug}`);
-        const gammaEvent = await fetchGammaEventBySlug(slug);
-        if (gammaEvent) {
-          // Extract tag slugs (e.g. "league-of-legends", "esports")
-          tags = (gammaEvent.tags ?? [])
-            .map(t => t.slug)
-            .filter((v): v is string => Boolean(v));
+        console.log(`🔍 [DEBUG] Fetching market info from Gamma API for slug: ${slug}`);
+        
+        // Try fetching as market slug first (raw API includes event info)
+        const gammaMarket = await fetchGammaMarketBySlug(slug);
+        if (gammaMarket) {
+          console.log(`✅ [DEBUG] Found market: ${gammaMarket.question}`);
           
-          name = gammaEvent.title ?? gammaEvent.slug ?? '';
-          slug = gammaEvent.slug ?? slug;
+          // Extract parent event slug from events array
+          if (gammaMarket.events && Array.isArray(gammaMarket.events) && gammaMarket.events.length > 0) {
+            parentEventSlug = gammaMarket.events[0].slug;
+            console.log(`✅ [DEBUG] Found parent event slug: ${parentEventSlug}`);
+          }
           
-          console.log(`✅ [DEBUG] Fetched tags: ${JSON.stringify(tags)}`);
-          console.log(`✅ [DEBUG] Fetched name: ${name}`);
+          // Extract tags from market
+          if (gammaMarket.tags) {
+            tags = Array.isArray(gammaMarket.tags) ? gammaMarket.tags : [];
+          }
+          
+          // Use market question as name
+          name = gammaMarket.question || gammaMarket.slug || '';
+          slug = gammaMarket.slug || slug;
+          
+          console.log(`✅ [DEBUG] Market tags: ${JSON.stringify(tags)}`);
+          console.log(`✅ [DEBUG] Market name: ${name}`);
         } else {
-          console.warn(`⚠️ [WARN] Gamma API returned null for eventSlug: ${slug}`);
+          // Slug doesn't match a market, try as event
+          console.log(`🔍 [DEBUG] No market found, trying as event slug: ${slug}`);
+          const gammaEvent = await fetchGammaEventBySlug(slug);
+          if (gammaEvent) {
+            tags = (gammaEvent.tags ?? [])
+              .map(t => t.slug)
+              .filter((v): v is string => Boolean(v));
+            
+            name = gammaEvent.title ?? gammaEvent.slug ?? '';
+            slug = gammaEvent.slug ?? slug;
+            
+            console.log(`✅ [DEBUG] Event tags: ${JSON.stringify(tags)}`);
+            console.log(`✅ [DEBUG] Event name: ${name}`);
+          } else {
+            console.warn(`⚠️ [WARN] Gamma API returned null for slug: ${slug}`);
+          }
         }
       } catch (error) {
-        console.error(`❌ [ERROR] Failed to fetch tags from Gamma API for ${slug}:`, error);
+        console.error(`❌ [ERROR] Failed to fetch from Gamma API for ${slug}:`, error);
       }
     }
     
@@ -105,6 +160,7 @@ export class MarketCache {
     const info: MarketInfo = {
       name,
       slug,
+      eventSlug: parentEventSlug,
       tags,
     };
     

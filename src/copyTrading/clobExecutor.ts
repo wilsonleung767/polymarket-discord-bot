@@ -5,7 +5,7 @@
  * Handles sizing, slippage, and order type mapping.
  */
 
-import type { ActivityTrade } from '@catalyst-team/poly-sdk';
+import type { SmartMoneyTrade } from '@catalyst-team/poly-sdk';
 import { PolymarketClobClient, type PlaceOrderParams, type OrderResponse } from '../polymarket/clob/client.js';
 import { MarketMetadataResolver } from '../polymarket/markets.js';
 
@@ -40,7 +40,7 @@ export class ClobExecutor {
    * Execute a copy trade from an incoming trade signal
    */
   async execute(
-    trade: ActivityTrade,
+    trade: SmartMoneyTrade,
     config: CopyTradingConfig
   ): Promise<ExecutionResult> {
     try {
@@ -64,7 +64,9 @@ export class ClobExecutor {
       }
 
       // Resolve market metadata (tokenID, tickSize, negRisk)
-      const metadata = await this.marketResolver.resolve(trade.marketSlug, trade.outcome);
+      const marketSlug = trade.marketSlug || trade.conditionId || '';
+      const outcome = trade.outcome || '';
+      const metadata = await this.marketResolver.resolve(marketSlug, outcome);
 
       // Calculate size based on original price (for display and fallback)
       let size = copyUsdcAmount / trade.price;

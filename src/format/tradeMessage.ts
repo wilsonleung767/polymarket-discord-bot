@@ -6,37 +6,27 @@ export interface TradeMessageData {
   result: OrderResult;
   marketName: string;
   marketSlug: string;
+  eventSlug?: string; // Parent event slug for grouped markets
   leaderNotional: number;
   copyUsdcAmount: number;
   dryRun: boolean;
 }
 
 /**
- * Convert Unix timestamp (seconds) to UTC+8 formatted string
+ * Normalize timestamp to milliseconds
+ * SmartMoneyTrade.timestamp from poly-sdk 0.5.0 is already in milliseconds,
+ * but we normalize defensively in case a timestamp arrives in seconds.
  */
-function toUtc8String(unixSeconds: number): string {
-  const date = new Date(unixSeconds * 1000);
-  
-  // Convert to UTC+8 (Singapore/Hong Kong time)
-  const utc8Offset = 8 * 60; // 8 hours in minutes
-  const utc8Date = new Date(date.getTime() + utc8Offset * 60 * 1000);
-  
-  // Format: YYYY-MM-DD HH:mm:ss
-  const year = utc8Date.getUTCFullYear();
-  const month = String(utc8Date.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(utc8Date.getUTCDate()).padStart(2, '0');
-  const hours = String(utc8Date.getUTCHours()).padStart(2, '0');
-  const minutes = String(utc8Date.getUTCMinutes()).padStart(2, '0');
-  const seconds = String(utc8Date.getUTCSeconds()).padStart(2, '0');
-  
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+function normalizeTimestamp(timestamp: number): number {
+  // If timestamp is in seconds (< 1e12), convert to milliseconds
+  return timestamp < 1e12 ? timestamp * 1000 : timestamp;
 }
 
 /**
  * Format a copy trade event as a Discord embed
  */
 export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
-  const { trade, result, marketName, marketSlug, leaderNotional, copyUsdcAmount, dryRun } = data;
+  const { trade, result, marketName, marketSlug, eventSlug, leaderNotional, copyUsdcAmount, dryRun } = data;
 
   // Determine color based on action (BUY/SELL)
   let color: number;
@@ -52,11 +42,20 @@ export function formatTradeMessage(data: TradeMessageData): EmbedBuilder {
   const embed = new EmbedBuilder()
     .setTitle(`${dryRun ? '[DRY RUN] ' : ''}${displayName}`)
     .setColor(color)
-    .setTimestamp(new Date(trade.timestamp * 1000));
+    .setTimestamp(new Date(normalizeTimestamp(trade.timestamp)));
 
   // Add market link if slug is available
+  // Use proper URL format: /event/<eventSlug>/<marketSlug> for grouped markets
   if (marketSlug) {
-    embed.setURL(`https://polymarket.com/event/${marketSlug}`);
+    let marketUrl: string;
+    if (eventSlug && eventSlug !== marketSlug) {
+      // Grouped market - include parent event slug
+      marketUrl = `https://polymarket.com/event/${eventSlug}/${marketSlug}`;
+    } else {
+      // Standalone market
+      marketUrl = `https://polymarket.com/event/${marketSlug}`;
+    }
+    embed.setURL(marketUrl);
   }
 
   // Add fields

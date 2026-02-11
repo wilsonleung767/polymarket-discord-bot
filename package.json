@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "register-commands": "tsx src/commands/register.ts",
-    "test-websocket": "tsx src/test-websocket.ts",
+    "test-polling": "tsx src/test-polling.ts",
     "test-clob": "tsx src/test-clob-order.ts",
     "swap": "tsx src/swap-usdc.ts"
   },
@@ -22,7 +22,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@catalyst-team/poly-sdk": "^0.4.6",
+    "@catalyst-team/poly-sdk": "^0.5.0",
     "@polymarket/clob-client": "^5.2.1",
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.1",

@@ -1,8 +1,8 @@
 import type {
-  RealtimeServiceV2,
   DataApiClient,
   GammaApiClient,
-  ActivityTrade,
+  SmartMoneyTrade,
+  SmartMoneyService,
 } from "@catalyst-team/poly-sdk";
 import type { Client, TextChannel } from "discord.js";
 import { ClobClient } from "@polymarket/clob-client";
@@ -35,7 +35,7 @@ export interface SessionState {
   startTime: number;
   cumulativeSpent: number;
   spentByMarket: Map<string, number>; // Track USDC spent per market slug (for BUY trades)
-  skippedCount: number; // Track number of trades skipped due to filters
+  skippedCount?: number;
 }
 
 /**
@@ -43,7 +43,7 @@ export interface SessionState {
  * Only one active session allowed at a time
  */
 export class CopyTradingSession {
-  private realtimeService: RealtimeServiceV2;
+  private smartMoneyService: SmartMoneyService;
   private dataApiClient: DataApiClient;
   private gammaApiClient: GammaApiClient;
   private discordClient: Client;
@@ -55,13 +55,13 @@ export class CopyTradingSession {
   private seenTransactions: Set<string> = new Set();
 
   constructor(
-    realtimeService: RealtimeServiceV2,
+    smartMoneyService: SmartMoneyService,
     dataApiClient: DataApiClient,
     gammaApiClient: GammaApiClient,
     discordClient: Client,
     clobClient: PolymarketClobClient,
   ) {
-    this.realtimeService = realtimeService;
+    this.smartMoneyService = smartMoneyService;
     this.dataApiClient = dataApiClient;
     this.gammaApiClient = gammaApiClient;
     this.discordClient = discordClient;
@@ -133,25 +133,23 @@ export class CopyTradingSession {
     console.log(`Channel: ${config.channelId}, DryRun: ${config.dryRun}`);
 
     try {
-      // Add delay to ensure WebSocket connection is fully registered on Polymarket's backend
-      console.log(
-        "⏳ Waiting 1 second for WebSocket connection to stabilize...",
-      );
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      // Subscribe to all activity and filter by target address
+      // Subscribe to smart money trades using Data API polling
       const targetAddress = config.targetAddress.toLowerCase();
 
-      const subscription = this.realtimeService.subscribeAllActivity({
-        onTrade: async (trade: ActivityTrade) => {
+      console.log(
+        `📡 Starting Data API polling for ${targetAddress}...`,
+      );
+
+      const subscription = this.smartMoneyService.subscribeSmartMoneyTrades(
+        async (trade: SmartMoneyTrade) => {
           // Filter by target address
-          const traderAddress = trade.trader?.address?.toLowerCase();
+          const traderAddress = trade.traderAddress?.toLowerCase();
           if (!traderAddress || traderAddress !== targetAddress) {
             return;
           }
 
           // Deduplicate by transaction hash
-          if (this.isSeenTransaction(trade.transactionHash)) {
+          if (trade.txHash && this.isSeenTransaction(trade.txHash)) {
             return;
           }
 
@@ -160,11 +158,11 @@ export class CopyTradingSession {
           );
           await this.handleTrade(trade, config);
         },
-        onError: (error: Error) => {
-          console.error("❌ Copy trading error:", error.message);
-          this.handleError(error, config.channelId);
-        },
-      });
+        { 
+          filterAddresses: [targetAddress],
+          smartMoneyOnly: false // Track all trades from target, not just smart money
+        }
+      );
 
       // Store session state
       this.activeSession = {
@@ -212,10 +210,19 @@ export class CopyTradingSession {
   }
 
   /**
+   * Increment skip counter
+   */
+  private incrementSkipped(): void {
+    if (this.activeSession) {
+      this.activeSession.skippedCount = (this.activeSession.skippedCount ?? 0) + 1;
+    }
+  }
+
+  /**
    * Handle a trade event
    */
   private async handleTrade(
-    trade: ActivityTrade,
+    trade: SmartMoneyTrade,
     config: SessionConfig,
   ): Promise<void> {
     try {
@@ -228,11 +235,7 @@ export class CopyTradingSession {
         console.log(
           `⏭️ Skipping BUY trade - price ${trade.price} exceeds max odds ${config.maxOdds}`,
         );
-
-        // Increment skip counter
-        if (this.activeSession) {
-          this.activeSession.skippedCount++;
-        }
+        this.incrementSkipped();
 
         // Optionally send a small notification to the channel
         try {
@@ -257,11 +260,11 @@ export class CopyTradingSession {
         return;
       }
 
-      // Fetch market info (using eventSlug from trade object, fallback to marketSlug)
-      const slugToFetch = trade?.eventSlug || trade?.marketSlug || "";
+      // Fetch market info (using marketSlug from trade)
+      const slugToFetch = trade?.marketSlug || trade?.conditionId || "";
       const marketInfo = await this.marketCache.getMarketInfo(
         slugToFetch,
-        trade?.marketSlug ?? "",
+        trade?.conditionId ?? "",
       );
 
       // Filter by categories if specified
@@ -282,12 +285,7 @@ export class CopyTradingSession {
           console.log(
             `⏭️ Skipping trade - market tags [${marketInfo.tags.join(", ")}] don't match filter [${config.categories.join(", ")}]`,
           );
-          
-          // Increment skip counter
-          if (this.activeSession) {
-            this.activeSession.skippedCount++;
-          }
-          
+          this.incrementSkipped();
           return;
         }
       }
@@ -299,6 +297,15 @@ export class CopyTradingSession {
       let plannedCopyUsdcAmount = leaderNotional * config.sizeScale;
       if (plannedCopyUsdcAmount > config.maxSizePerTrade) {
         plannedCopyUsdcAmount = config.maxSizePerTrade;
+      }
+
+      // Check minimum trade size BEFORE execution
+      if (plannedCopyUsdcAmount < config.minTradeSize) {
+        console.log(
+          `⏭️ Skipping trade - amount $${plannedCopyUsdcAmount.toFixed(2)} < min $${config.minTradeSize}`,
+        );
+        this.incrementSkipped();
+        return;
       }
 
       // Check per-market limit for BUY trades
@@ -318,11 +325,7 @@ export class CopyTradingSession {
           console.log(
             `   Current: $${currentMarketSpent.toFixed(2)}, Planned: $${plannedCopyUsdcAmount.toFixed(2)}, Cap: $${config.maxTotalPerMarket}`,
           );
-
-          // Increment skip counter
-          if (this.activeSession) {
-            this.activeSession.skippedCount++;
-          }
+          this.incrementSkipped();
 
           // Send notification to channel
           try {
@@ -363,14 +366,10 @@ export class CopyTradingSession {
       let executionResult;
       if (config.dryRun) {
         // In dry run, calculate copy amount but don't execute
-        let copyUsdcAmount = leaderNotional * config.sizeScale;
-        if (copyUsdcAmount > config.maxSizePerTrade) {
-          copyUsdcAmount = config.maxSizePerTrade;
-        }
-
+        // We already know it passes minTradeSize check above
         executionResult = {
           success: true,
-          copyUsdcAmount,
+          copyUsdcAmount: plannedCopyUsdcAmount,
         };
       } else {
         // Execute real trade
@@ -379,45 +378,82 @@ export class CopyTradingSession {
 
       const copyUsdcAmount = executionResult.copyUsdcAmount;
 
-      // Check total limit before tracking spending
-      if (config.totalLimit && this.activeSession) {
-        const newTotal = this.activeSession.cumulativeSpent + copyUsdcAmount;
-
-        if (newTotal > config.totalLimit) {
-          console.log(
-            `🛑 Total limit reached: $${this.activeSession.cumulativeSpent.toFixed(2)} + $${copyUsdcAmount.toFixed(2)} = $${newTotal.toFixed(2)} > $${config.totalLimit}`,
-          );
-
-          // Send limit reached notification
-          const channel = await this.discordClient.channels.fetch(
-            config.channelId,
-          );
+      // Check if execution failed due to "too small" (defensive - should be caught by pre-check)
+      if (!executionResult.success && executionResult.error) {
+        const isTooSmall = /too small|below minimum/i.test(executionResult.error);
+        if (isTooSmall) {
+          console.log(`⏭️ Trade rejected as too small: ${executionResult.error}`);
+          this.incrementSkipped();
+          // Don't count this in spending, just notify user
+          const adaptedResult = {
+            success: false,
+            orderId: undefined,
+            errorMsg: executionResult.error,
+          };
+          const embed = formatTradeMessage({
+            trade: trade,
+            result: adaptedResult as any,
+            marketName: marketInfo.name,
+            marketSlug: marketInfo.slug,
+            eventSlug: marketInfo.eventSlug,
+            leaderNotional,
+            copyUsdcAmount,
+            dryRun: config.dryRun,
+          });
+          const channel = await this.discordClient.channels.fetch(config.channelId);
           if (channel?.isTextBased()) {
-            await (channel as TextChannel).send({
-              content: `🛑 **Total Limit Reached!**\n\nSession stopped automatically.\nTotal spent: $${this.activeSession.cumulativeSpent.toFixed(2)}\nLimit: $${config.totalLimit}\n\nUse \`/start\` to begin a new session.`,
-            });
+            await (channel as TextChannel).send({ embeds: [embed] });
           }
-
-          // Stop the session
-          await this.stop();
           return;
         }
+      }
 
-        // Update cumulative spending (even in dry run for tracking)
+      // Determine if this trade should count toward spending
+      // Only count successful BUY orders (or dry-run simulated BUY orders)
+      const shouldTrackSpending = 
+        (config.dryRun || executionResult.success) && 
+        trade.side === "BUY";
+
+      // Track spending and check limits (always track, not just when totalLimit is set)
+      if (this.activeSession && shouldTrackSpending) {
+        // Check total limit BEFORE adding to cumulative
+        if (config.totalLimit) {
+          const newTotal = this.activeSession.cumulativeSpent + copyUsdcAmount;
+
+          if (newTotal > config.totalLimit) {
+            console.log(
+              `🛑 Total limit reached: $${this.activeSession.cumulativeSpent.toFixed(2)} + $${copyUsdcAmount.toFixed(2)} = $${newTotal.toFixed(2)} > $${config.totalLimit}`,
+            );
+
+            // Send limit reached notification
+            const channel = await this.discordClient.channels.fetch(
+              config.channelId,
+            );
+            if (channel?.isTextBased()) {
+              await (channel as TextChannel).send({
+                content: `🛑 **Total Limit Reached!**\n\nSession stopped automatically.\nTotal spent: $${this.activeSession.cumulativeSpent.toFixed(2)}\nLimit: $${config.totalLimit}\n\nUse \`/start\` to begin a new session.`,
+              });
+            }
+
+            // Stop the session
+            await this.stop();
+            return;
+          }
+        }
+
+        // Update cumulative spending
         this.activeSession.cumulativeSpent += copyUsdcAmount;
 
-        // Update per-market spending for BUY trades
-        if (trade.side === "BUY") {
-          const currentMarketSpent =
-            this.activeSession.spentByMarket.get(marketInfo.slug) ?? 0;
-          this.activeSession.spentByMarket.set(
-            marketInfo.slug,
-            currentMarketSpent + copyUsdcAmount,
-          );
-          console.log(
-            `📊 Market spending updated for ${marketInfo.slug}: $${(currentMarketSpent + copyUsdcAmount).toFixed(2)}`,
-          );
-        }
+        // Update per-market spending
+        const currentMarketSpent =
+          this.activeSession.spentByMarket.get(marketInfo.slug) ?? 0;
+        this.activeSession.spentByMarket.set(
+          marketInfo.slug,
+          currentMarketSpent + copyUsdcAmount,
+        );
+        console.log(
+          `📊 Market spending updated for ${marketInfo.slug}: $${(currentMarketSpent + copyUsdcAmount).toFixed(2)}`,
+        );
       }
 
       // Format result for Discord embed (adapt to old format)
@@ -427,25 +463,13 @@ export class CopyTradingSession {
         errorMsg: executionResult.error,
       };
 
-      // Convert ActivityTrade to SmartMoneyTrade format for formatting
-      const adaptedTrade = {
-        traderAddress: trade.trader?.address || "",
-        traderName: trade.trader?.name,
-        side: trade.side,
-        outcome: trade.outcome,
-        price: trade.price,
-        size: trade.size,
-        timestamp: Math.floor(trade.timestamp / 1000), // Convert to seconds
-        txHash: trade.transactionHash,
-        marketSlug: trade.marketSlug,
-      };
-
       // Format and send message
       const embed = formatTradeMessage({
-        trade: adaptedTrade as any,
+        trade: trade,
         result: adaptedResult as any,
         marketName: marketInfo.name,
         marketSlug: marketInfo.slug,
+        eventSlug: marketInfo.eventSlug,
         leaderNotional,
         copyUsdcAmount,
         dryRun: config.dryRun,
@@ -488,19 +512,19 @@ export class CopyTradingSession {
       return null;
     }
 
-    // Convert Map to array for JSON serialization
-    const spentByMarket = Array.from(
-      this.activeSession.spentByMarket.entries(),
-    ).map(([market, spent]) => ({ market, spent }));
+    // Build spend by market array for display
+    const spentByMarket = Array.from(this.activeSession.spentByMarket.entries()).map(
+      ([market, spent]) => ({ market, spent })
+    );
 
-    // Return basic session stats (without SDK getStats method)
+    // Return session stats
     return {
       startTime: this.activeSession.startTime,
       targetAddress: this.activeSession.config.targetAddress,
       cumulativeSpent: this.activeSession.cumulativeSpent,
       dryRun: this.activeSession.config.dryRun,
-      skippedCount: this.activeSession.skippedCount,
       spentByMarket,
+      skippedCount: this.activeSession.skippedCount || 0,
     };
   }
 }
